@@ -1,3 +1,7 @@
 streamlit==1.41.1
+<<<<<<< HEAD
 sentence-transformers==3.3.1
+=======
+sentence_transformers==3.3.1
+>>>>>>> 44ba468 (Forgot requirements.txt lol)
 langchain==0.3.14
