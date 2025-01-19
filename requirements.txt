@@ -1,7 +1,5 @@
-streamlit==1.41.1
-<<<<<<< HEAD
-sentence-transformers==3.3.1
-=======
-sentence_transformers==3.3.1
->>>>>>> 44ba468 (Forgot requirements.txt lol)
 langchain==0.3.14
+sentence_transformers==3.3.1
+streamlit==1.41.1
+langchain-community==0.3.14
+faiss-cpu==1.9.0.post1
