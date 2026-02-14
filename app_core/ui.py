@@ -168,7 +168,7 @@ def render_query_page(settings: Dict) -> None:
     st.subheader("Ask a Question")
     with st.form("query_form"):
         query = st.text_input("Question")
-        submit = st.form_submit_button("Run Grounded Query")
+        submit = st.form_submit_button("Run Query")
 
     if not (submit and query.strip()):
         return
