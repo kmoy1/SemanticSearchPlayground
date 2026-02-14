@@ -1,0 +1,4 @@
+Acme Corp PTO Policy (effective January 1, 2025):
+- Full-time employees receive 20 PTO days per calendar year.
+- PTO does not roll over beyond 5 days.
+- Managers must approve PTO requests at least 3 business days in advance.
