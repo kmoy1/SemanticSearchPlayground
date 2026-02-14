@@ -1,6 +1,8 @@
 # Semantic Search Playground (Grounded RAG)
 
-A local-first Retrieval-Augmented Generation (RAG) app built with Streamlit, LangChain, and FAISS.
+A Retrieval-Augmented Generation (RAG) app built with Streamlit, LangChain, FAISS.
+
+NOTE: OPENAI_API_KEY needs to be configured- this does not run an LLM until it does, and will only fetch the closest semantically-relevant document without an LLM answer.
 
 ## Features
 
@@ -9,16 +11,15 @@ A local-first Retrieval-Augmented Generation (RAG) app built with Streamlit, Lan
 - Retrieve top-k relevant chunks for each question
 - Generate grounded answers using an OpenAI model
 - Show citations (source file + chunk id)
-- Track token usage and estimated cost
 - Cache query results per index configuration
 
 ## Project Structure
 
-- `app.py`: thin Streamlit entrypoint
-- `app_core/ui.py`: sidebar + page rendering logic
-- `app_core/state.py`: session state initialization, cache keys, usage accumulation
-- `app_core/settings.py`: defaults, pricing table, environment config helpers
-- `app_core/rag.py`: document chunking, retrieval, and grounded LLM generation
+- `app.py`: Entry point
+- `app_core/ui.py`: UI logic + component definitions
+- `app_core/state.py`: Session state (e.g. training corpus + trained index), cache keys
+- `app_core/settings.py`: defaults + other configs
+- `app_core/rag.py`: Logic for doc chunking, retrieval (FAISS vector store usage), and LLM generation (calling OpenAI LLM)
 
 ## Setup
 
@@ -43,9 +44,13 @@ If `OPENAI_API_KEY` is not set, the app runs in retrieval-only mode.
 streamlit run app.py
 ```
 
-## App Flow
+## Testing
 
-1. Upload text files
-2. Build/rebuild index (chunking + embeddings + FAISS)
-3. Ask a question
-4. Review grounded answer and citations
+Use `test_docs/` for testing:
+
+1. Upload all files in `test_docs/`
+2. Click `Train/Rebuild Index`
+3. Run queries:
+   - `How many PTO days do full-time employees get?` (Should return `benefits.txt`)
+   - `When does health insurance start for new employees?` (Should return `company_policy.txt`)
+   - `What team offsite ideas are listed?` (Should return `random_notes.txt`)
