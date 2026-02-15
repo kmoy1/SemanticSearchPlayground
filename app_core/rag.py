@@ -1,9 +1,10 @@
 import time
 from typing import Dict, List, Tuple
 
+import requests
 from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from openai import OpenAI
 
@@ -53,10 +54,20 @@ def _build_grounding_prompt(query: str, retrieved_docs: List[Tuple[Document, flo
     return (
         "Use only the provided context to answer the user. "
         "If the context is insufficient, say you do not have enough information. "
-        "At the end of your answer, include a line `Citations:` followed by source ids in square brackets.\n\n"
+        "Do not include citations in your response.\n\n"
         f"Question:\n{query}\n\n"
         f"Context:\n{context_text}"
     )
+
+
+def _strip_inline_citations(answer: str) -> str:
+    """Remove model-emitted inline citation lines; UI renders citations separately."""
+    cleaned_lines = []
+    for line in answer.splitlines():
+        if line.strip().lower().startswith("citations:"):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
 
 
 def generate_grounded_answer(
@@ -94,8 +105,48 @@ def generate_grounded_answer(
                 "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
             }
             return {
-                "answer": response.choices[0].message.content,
+                "answer": _strip_inline_citations(response.choices[0].message.content or ""),
                 "usage": usage_dict,
+            }
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < max_retries:
+                time.sleep(2 ** attempt)
+            else:
+                raise last_error
+
+
+def generate_grounded_answer_ollama(
+    query: str,
+    retrieved_docs: List[Tuple[Document, float]],
+    model_name: str = "llama3.2:3b",
+    temperature: float = 0.0,
+    base_url: str = "http://localhost:11434",
+    max_retries: int = 2,
+) -> Dict:
+    prompt = _build_grounding_prompt(query, retrieved_docs)
+    url = f"{base_url.rstrip('/')}/api/generate"
+    last_error = None
+
+    payload = {
+        "model": model_name,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": temperature},
+    }
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            return {
+                "answer": _strip_inline_citations(data.get("response", "")),
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
             }
         except Exception as exc:  # noqa: BLE001
             last_error = exc

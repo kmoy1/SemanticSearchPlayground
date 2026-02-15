@@ -10,11 +10,12 @@ from app_core.rag import (
     chunk_documents,
     create_faiss_store,
     generate_grounded_answer,
+    generate_grounded_answer_ollama,
     load_embeddings_model,
     retrieve_top_k,
 )
-from app_core.settings import DEFAULTS, estimate_cost_usd, get_openai_api_key
-from app_core.state import add_usage, build_index_signature, build_query_cache_key, reset_index_state
+from app_core.settings import DEFAULTS, get_openai_api_key
+from app_core.state import build_index_signature, build_query_cache_key, reset_index_state
 
 
 @st.cache_resource
@@ -63,7 +64,15 @@ def render_sidebar() -> Dict:
         "retrieval_k": st.sidebar.slider(
             "Top-K Retrieval", min_value=1, max_value=8, value=DEFAULTS.retrieval_k, step=1
         ),
-        "model_name": st.sidebar.text_input("OpenAI Model", value=DEFAULTS.model_name),
+        "llm_provider": st.sidebar.selectbox(
+            "LLM Provider",
+            options=["ollama", "openai"],
+            index=0 if DEFAULTS.llm_provider == "ollama" else 1,
+        ),
+        "model_name": st.sidebar.text_input("LLM Model", value=DEFAULTS.model_name),
+        "ollama_base_url": st.sidebar.text_input(
+            "Ollama Base URL", value=DEFAULTS.ollama_base_url
+        ),
         "temperature": st.sidebar.slider(
             "LLM Temperature", min_value=0.0, max_value=0.7, value=DEFAULTS.temperature, step=0.1
         ),
@@ -113,22 +122,6 @@ def render_upload_page() -> None:
                 st.write(doc_content)
 
 
-def _render_usage(usage: Dict[str, float]) -> None:
-    st.subheader("Usage")
-    st.write(
-        {
-            "query_input_tokens": usage["input_tokens"],
-            "query_output_tokens": usage["output_tokens"],
-            "query_total_tokens": usage["total_tokens"],
-            "query_estimated_cost_usd": round(usage["estimated_cost_usd"], 6),
-            "session_total_tokens": st.session_state.usage_totals["total_tokens"],
-            "session_estimated_cost_usd": round(
-                st.session_state.usage_totals["estimated_cost_usd"], 6
-            ),
-        }
-    )
-
-
 def render_query_page(settings: Dict) -> None:
     st.title("Grounded RAG Q&A")
 
@@ -176,6 +169,7 @@ def render_query_page(settings: Dict) -> None:
     cache_key = build_query_cache_key(
         query,
         settings["retrieval_k"],
+        settings["llm_provider"],
         settings["model_name"],
         settings["temperature"],
         st.session_state.get("index_signature", ""),
@@ -194,46 +188,66 @@ def render_query_page(settings: Dict) -> None:
             )
 
         api_key = _resolve_openai_api_key()
-        if api_key:
-            with st.spinner("Generating grounded answer..."):
-                generation = generate_grounded_answer(
-                    query=query,
-                    retrieved_docs=retrieved,
-                    api_key=api_key,
-                    model_name=settings["model_name"],
-                    temperature=settings["temperature"],
+        retrieval_only_reason = ""
+        if settings["llm_provider"] == "ollama":
+            try:
+                with st.spinner("Generating grounded answer..."):
+                    generation = generate_grounded_answer_ollama(
+                        query=query,
+                        retrieved_docs=retrieved,
+                        model_name=settings["model_name"],
+                        temperature=settings["temperature"],
+                        base_url=settings["ollama_base_url"],
+                    )
+                answer_text = generation["answer"]
+            except Exception as exc:  # noqa: BLE001
+                answer_text = retrieved[0][0].page_content
+                retrieval_only_reason = (
+                    f"Ollama request failed ({type(exc).__name__}). "
+                    "Showing retrieval-only result. Ensure Ollama is running and model is pulled."
                 )
-            answer_text = generation["answer"]
-            usage = generation["usage"]
-            usage["estimated_cost_usd"] = estimate_cost_usd(
-                settings["model_name"],
-                usage["input_tokens"],
-                usage["output_tokens"],
-            )
-            add_usage(usage)
+        elif api_key:
+            try:
+                with st.spinner("Generating grounded answer..."):
+                    generation = generate_grounded_answer(
+                        query=query,
+                        retrieved_docs=retrieved,
+                        api_key=api_key,
+                        model_name=settings["model_name"],
+                        temperature=settings["temperature"],
+                    )
+                answer_text = generation["answer"]
+            except Exception as exc:  # noqa: BLE001
+                answer_text = retrieved[0][0].page_content
+                error_text = str(exc).lower()
+                if "insufficient_quota" in error_text or "429" in error_text:
+                    retrieval_only_reason = (
+                        "OpenAI request failed due to quota/rate-limit. "
+                        "Showing retrieval-only result."
+                    )
+                else:
+                    retrieval_only_reason = (
+                        f"OpenAI request failed ({type(exc).__name__}). "
+                        "Showing retrieval-only result."
+                    )
         else:
             answer_text = retrieved[0][0].page_content
-            usage = {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "estimated_cost_usd": 0.0,
-            }
+            retrieval_only_reason = (
+                "OpenAI API key not configured, so this is retrieval-only mode. "
+                "Set OPENAI_API_KEY to enable LLM grounded answers."
+            )
 
         result = {
             "answer": answer_text,
             "retrieved": retrieved,
-            "usage": usage,
-            "retrieval_only": not bool(api_key),
+            "retrieval_only": bool(retrieval_only_reason),
+            "retrieval_only_reason": retrieval_only_reason,
         }
         st.session_state.query_cache[cache_key] = result
 
     st.subheader("Answer")
     if result.get("retrieval_only"):
-        st.warning(
-            "OpenAI API key not configured, so this is retrieval-only mode. "
-            "Set OPENAI_API_KEY to enable LLM grounded answers."
-        )
+        st.warning(result.get("retrieval_only_reason", "Showing retrieval-only result."))
         st.text_area("Retrieved Context", value=result["answer"], height=220, disabled=True)
     else:
         st.write(result["answer"])
@@ -243,5 +257,3 @@ def render_query_page(settings: Dict) -> None:
         source = f"{doc.metadata.get('file_name', 'unknown')}#chunk_{doc.metadata.get('chunk_id', 'na')}"
         with st.expander(f"{rank}. {source} (distance: {score:.4f})"):
             st.write(doc.page_content)
-
-    _render_usage(result["usage"])
